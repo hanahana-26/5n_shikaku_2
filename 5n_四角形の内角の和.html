@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>四角形の内角の和シミュレーター</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #f0f4f8;
+            touch-action: none;
+            overflow: hidden;
+            font-family: 'sans-serif';
+        }
+        canvas {
+            background-color: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            cursor: crosshair;
+        }
+        .control-panel {
+            user-select: none;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center p-4 min-h-screen">
+    <div class="max-w-4xl w-full flex flex-col gap-4">
+        <div class="text-center">
+            <h1 class="text-2xl font-bold text-slate-800">四角形の内角の和（手動操作）</h1>
+            <p class="text-slate-600 text-sm">内側の4つの角を切り取って1点に集め、合計が360度（円）になるか確かめよう！</p>
+        </div>
+
+        <div class="relative flex justify-center">
+            <canvas id="canvas" width="800" height="500" class="w-full h-auto border border-slate-200"></canvas>
+            
+            <div id="hint-msg" class="absolute bottom-4 left-4 bg-white/90 px-3 py-2 rounded-lg text-sm text-slate-600 shadow-sm border border-slate-100 pointer-events-none">
+                モード：四角形の作成
+            </div>
+
+            <!-- ねじれ警告 -->
+            <div id="warning-msg" class="absolute top-4 bg-red-100 text-red-600 px-4 py-2 rounded-full text-sm font-bold shadow-sm border border-red-200 hidden">
+                ⚠️ 線が交差しています（ねじれ四角形）
+            </div>
+        </div>
+
+        <div class="control-panel flex flex-wrap justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-md border border-slate-200">
+            <div class="flex items-center gap-2">
+                <button id="cut-btn" class="bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-6 rounded-lg transition-all shadow-md active:scale-95">
+                    角を切り取る
+                </button>
+                <button id="reset-btn" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2 px-6 rounded-lg transition-all active:scale-95">
+                    リセット
+                </button>
+            </div>
+            
+            <div class="flex gap-4 items-center font-mono text-base md:text-lg bg-slate-50 px-4 py-2 rounded-lg border border-slate-100">
+                <div class="flex flex-col items-center">
+                    <span class="text-xs text-slate-400">角A</span>
+                    <span id="angle-a" class="text-red-500 font-bold">-</span>
+                </div>
+                <span class="text-slate-300">+</span>
+                <div class="flex flex-col items-center">
+                    <span class="text-xs text-slate-400">角B</span>
+                    <span id="angle-b" class="text-green-600 font-bold">-</span>
+                </div>
+                <span class="text-slate-300">+</span>
+                <div class="flex flex-col items-center">
+                    <span class="text-xs text-slate-400">角C</span>
+                    <span id="angle-c" class="text-blue-500 font-bold">-</span>
+                </div>
+                <span class="text-slate-300">+</span>
+                <div class="flex flex-col items-center">
+                    <span class="text-xs text-slate-400">角D</span>
+                    <span id="angle-d" class="text-amber-500 font-bold">-</span>
+                </div>
+                <span class="text-slate-300">=</span>
+                <div class="flex flex-col items-center">
+                    <span class="text-xs text-slate-400">合計</span>
+                    <span id="total-angle" class="font-black text-slate-800">360°</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const cutBtn = document.getElementById('cut-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const hintMsg = document.getElementById('hint-msg');
+        const warningMsg = document.getElementById('warning-msg');
+        
+        const angleDisplays = {
+            a: document.getElementById('angle-a'),
+            b: document.getElementById('angle-b'),
+            c: document.getElementById('angle-c'),
+            d: document.getElementById('angle-d'),
+            total: document.getElementById('total-angle')
+        };
+
+        let mode = 'edit'; 
+        let points = [
+            { x: 300, y: 150, color: '#ef4444', label: 'A', id: 0 },
+            { x: 250, y: 350, color: '#22c55e', label: 'B', id: 1 },
+            { x: 550, y: 350, color: '#3b82f6', label: 'C', id: 2 },
+            { x: 500, y: 150, color: '#f59e0b', label: 'D', id: 3 }
+        ];
+
+        let pieces = [];
+        let draggingItem = null; 
+        let rotatingItem = null;
+        let dragOffset = { x: 0, y: 0 };
+
+        const RADIUS = 80;
+        const HANDLE_RADIUS = 12;
+        const GROUND_Y = 400;
+        const TARGET_CENTER_X = 400;
+
+        function init() {
+            canvas.addEventListener('mousedown', onDown);
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+            canvas.addEventListener('touchstart', (e) => onDown(e.touches[0]));
+            window.addEventListener('touchmove', (e) => onMove(e.touches[0]));
+            window.addEventListener('touchend', onUp);
+            cutBtn.addEventListener('click', toggleMode);
+            resetBtn.addEventListener('click', resetAll);
+            requestAnimationFrame(draw);
+        }
+
+        function toggleMode() {
+            if (mode === 'edit') {
+                createPieces();
+                mode = 'play';
+                cutBtn.innerText = '作り直す';
+                hintMsg.innerText = 'モード：自由に並べてみよう';
+            } else {
+                mode = 'edit';
+                cutBtn.innerText = '角を切り取る';
+                hintMsg.innerText = 'モード：四角形の作成';
+                pieces = [];
+            }
+        }
+
+        function resetAll() {
+            mode = 'edit';
+            points = [
+                { x: 300, y: 150, color: '#ef4444', label: 'A', id: 0 },
+                { x: 250, y: 350, color: '#22c55e', label: 'B', id: 1 },
+                { x: 550, y: 350, color: '#3b82f6', label: 'C', id: 2 },
+                { x: 500, y: 150, color: '#f59e0b', label: 'D', id: 3 }
+            ];
+            pieces = [];
+            cutBtn.innerText = '角を切り取る';
+            hintMsg.innerText = 'モード：四角形の作成';
+        }
+
+        function createPieces() {
+            const angles = calculateAngleInfo();
+            pieces = angles.map((info, i) => ({
+                id: i,
+                x: points[i].x,
+                y: points[i].y,
+                angleSize: info.size,
+                rotation: info.start,
+                color: points[i].color,
+                label: points[i].label
+            }));
+        }
+
+        function calculateAngleInfo() {
+            // 符号付き面積で全体の巻き方向（時計回り/反時計回り）を判定
+            // スクリーン座標(Y下向き)では Area > 0 が時計回り
+            let area = 0;
+            for (let i = 0; i < 4; i++) {
+                let p1 = points[i];
+                let p2 = points[(i + 1) % 4];
+                area += (p1.x * p2.y - p2.x * p1.y);
+            }
+            const isCW = area > 0;
+
+            return points.map((p, i) => {
+                const pPrev = points[(i + 3) % 4];
+                const pNext = points[(i + 1) % 4];
+                
+                const aNext = Math.atan2(pNext.y - p.y, pNext.x - p.x);
+                const aPrev = Math.atan2(pPrev.y - p.y, pPrev.x - p.x);
+                
+                let angleStart, angleSize;
+
+                if (isCW) {
+                    // 時計回りの場合：aNextからaPrevへ時計回りに掃引するのが内角
+                    angleSize = aPrev - aNext;
+                    while (angleSize < 0) angleSize += Math.PI * 2;
+                    angleStart = aNext;
+                } else {
+                    // 反時計回りの場合：aPrevからaNextへ時計回りに掃引するのが内角
+                    angleSize = aNext - aPrev;
+                    while (angleSize < 0) angleSize += Math.PI * 2;
+                    angleStart = aPrev;
+                }
+
+                return { start: angleStart, size: angleSize };
+            });
+        }
+
+        function checkSelfIntersection() {
+            const intersect = (p1, p2, p3, p4) => {
+                const ccw = (a, b, c) => (c.y - a.y) * (b.x - a.x) > (b.y - a.y) * (c.x - a.x);
+                return ccw(p1, p3, p4) !== ccw(p2, p3, p4) && ccw(p1, p2, p3) !== ccw(p1, p2, p4);
+            };
+            return intersect(points[0], points[1], points[2], points[3]) || 
+                   intersect(points[1], points[2], points[3], points[0]);
+        }
+
+        function onDown(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+            const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+            if (mode === 'edit') {
+                for (const p of points) {
+                    if (Math.hypot(p.x - x, p.y - y) < 25) {
+                        draggingItem = p;
+                        dragOffset = { x: p.x - x, y: p.y - y };
+                        return;
+                    }
+                }
+            } else {
+                for (let i = pieces.length - 1; i >= 0; i--) {
+                    const p = pieces[i];
+                    const handleAngle = p.rotation + p.angleSize / 2;
+                    const hx = p.x + Math.cos(handleAngle) * (RADIUS + 15);
+                    const hy = p.y + Math.sin(handleAngle) * (RADIUS + 15);
+
+                    if (Math.hypot(hx - x, hy - y) < 25) {
+                        rotatingItem = p;
+                        pieces.splice(i, 1); pieces.push(p);
+                        return;
+                    }
+                    if (Math.hypot(p.x - x, p.y - y) < RADIUS) {
+                        draggingItem = p;
+                        dragOffset = { x: p.x - x, y: p.y - y };
+                        pieces.splice(i, 1); pieces.push(p);
+                        return;
+                    }
+                }
+            }
+        }
+
+        function onMove(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+            const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+            if (draggingItem) {
+                draggingItem.x = Math.max(20, Math.min(canvas.width - 20, x + dragOffset.x));
+                draggingItem.y = Math.max(20, Math.min(canvas.height - 20, y + dragOffset.y));
+                if (mode === 'play' && Math.hypot(draggingItem.x - TARGET_CENTER_X, draggingItem.y - GROUND_Y) < 20) {
+                    draggingItem.x = TARGET_CENTER_X; draggingItem.y = GROUND_Y;
+                }
+            }
+            if (rotatingItem) {
+                const angle = Math.atan2(y - rotatingItem.y, x - rotatingItem.x);
+                rotatingItem.rotation = angle - rotatingItem.angleSize / 2;
+                const rotDeg = (rotatingItem.rotation * 180 / Math.PI);
+                [0, 45, 90, 135, 180, 225, 270, 315, 360, -45, -90, -135, -180].forEach(snap => {
+                    if (Math.abs(rotDeg - snap) < 5) rotatingItem.rotation = snap * Math.PI / 180;
+                });
+            }
+        }
+
+        function onUp() { draggingItem = null; rotatingItem = null; }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // ガイドライン
+            ctx.beginPath();
+            ctx.moveTo(100, GROUND_Y); ctx.lineTo(700, GROUND_Y);
+            ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1; ctx.stroke();
+
+            if (mode === 'play') {
+                ctx.beginPath();
+                ctx.arc(TARGET_CENTER_X, GROUND_Y, 5, 0, Math.PI * 2);
+                ctx.fillStyle = '#64748b'; ctx.fill();
+            }
+
+            // 四角形の枠描画
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for(let i=1; i<4; i++) ctx.lineTo(points[i].x, points[i].y);
+            ctx.closePath();
+            ctx.strokeStyle = '#94a3b8';
+            ctx.setLineDash(mode === 'edit' ? [] : [5, 5]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            if (mode === 'edit') {
+                ctx.fillStyle = 'rgba(148, 163, 184, 0.1)';
+                ctx.fill();
+                warningMsg.style.display = checkSelfIntersection() ? 'block' : 'none';
+            } else {
+                warningMsg.style.display = 'none';
+            }
+
+            const angleInfo = calculateAngleInfo();
+            let sum = 0;
+            angleInfo.forEach((info, i) => {
+                const deg = Math.round(info.size * 180 / Math.PI);
+                angleDisplays[['a','b','c','d'][i]].innerText = deg + '°';
+                sum += deg;
+            });
+            angleDisplays.total.innerText = sum + '°';
+
+            if (mode === 'edit') {
+                points.forEach(p => {
+                    ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, Math.PI * 2);
+                    ctx.fillStyle = p.color; ctx.fill();
+                    ctx.strokeStyle = 'white'; ctx.lineWidth = 3; ctx.stroke();
+                    ctx.fillStyle = '#1e293b'; ctx.font = 'bold 18px sans-serif';
+                    ctx.fillText(p.label, p.x - 6, p.y - 20);
+                });
+                angleInfo.forEach((info, i) => {
+                    drawSector(points[i].x, points[i].y, info.start, info.size, points[i].color, 0.4);
+                });
+            } else {
+                pieces.forEach(p => drawPiece(p));
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        function drawPiece(p) {
+            ctx.save();
+            ctx.beginPath(); ctx.moveTo(p.x, p.y);
+            // Canvasのarcは時計回りに描画される
+            ctx.arc(p.x, p.y, RADIUS, p.rotation, p.rotation + p.angleSize);
+            ctx.lineTo(p.x, p.y);
+            ctx.fillStyle = p.color; ctx.globalAlpha = 0.7; ctx.fill();
+            ctx.strokeStyle = p.color; ctx.lineWidth = 3; ctx.globalAlpha = 1; ctx.stroke();
+
+            const midAngle = p.rotation + p.angleSize / 2;
+            ctx.fillStyle = 'white'; ctx.font = 'bold 18px sans-serif';
+            ctx.fillText(p.label, p.x + Math.cos(midAngle) * RADIUS * 0.5 - 7, p.y + Math.sin(midAngle) * RADIUS * 0.5 + 7);
+
+            const hx = p.x + Math.cos(midAngle) * (RADIUS + 15);
+            const hy = p.y + Math.sin(midAngle) * (RADIUS + 15);
+            ctx.beginPath(); ctx.arc(hx, hy, HANDLE_RADIUS, 0, Math.PI * 2);
+            ctx.fillStyle = 'white'; ctx.fill();
+            ctx.strokeStyle = p.color; ctx.lineWidth = 2; ctx.stroke();
+            ctx.beginPath(); ctx.arc(hx, hy, 5, 0, Math.PI * 2);
+            ctx.fillStyle = p.color; ctx.fill();
+            ctx.restore();
+        }
+
+        function drawSector(x, y, start, size, color, alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.beginPath(); ctx.moveTo(x, y);
+            ctx.arc(x, y, RADIUS, start, start + size);
+            ctx.lineTo(x, y);
+            ctx.fillStyle = color; ctx.fill();
+            ctx.restore();
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
